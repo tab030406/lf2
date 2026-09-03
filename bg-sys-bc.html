@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>Brokeback Cliff - LF2 Stage Preview</title>
+  <style>
+    body {
+      background-color: #111;
+      color: #fff;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 0;
+      padding: 20px;
+    }
+
+    h1 {
+      margin-bottom: 10px;
+    }
+
+    /* 視窗容器：模擬 LF2 遊戲視窗 (794x550) */
+    .viewport {
+      position: relative;
+      width: 794px;
+      height: 550px;
+      overflow: hidden;
+      border: 3px solid #444;
+      background-color: #000;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.8);
+    }
+
+    /* 地圖世界容器 */
+    .stage-world {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 794px;
+      height: 100%;
+    }
+
+    /* 圖層基礎設定 */
+    .layer {
+      position: absolute;
+      image-rendering: pixelated;
+    }
+
+    /* 遠景獨立圖層 (z-index: 1) */
+    .bg-far-tile {
+      position: absolute;
+      top: 129px;
+      width: 460px;
+      height: 200px;
+      background-repeat: no-repeat;
+      z-index: 1;
+    }
+
+    /* Layer 4: 使用 Canvas 來達成 100% 精準的 LF2 去黑底 */
+    #bc4-canvas {
+      position: absolute;
+      left: 0px;
+      top: 261px;
+      width: 794px;
+      height: 100px;
+      z-index: 2;
+      image-rendering: pixelated;
+    }
+
+    /* Layer 5: 地面 (z-index: 3) */
+    #bc5 {
+      left: 0px;
+      top: 296px;
+      width: 794px;
+      height: 254px;
+      z-index: 3;
+      background-image: url('https://tab030406.github.io/lf2/bg-sys-bc-bc5.png');
+      background-repeat: repeat-x;
+      background-position-x: 0px;
+    }
+
+    /* 角色活動邊界指示線 */
+    .z-boundary {
+      position: absolute;
+      left: 0;
+      width: 100%;
+      border-top: 1px dashed rgba(255, 0, 0, 0.5);
+      pointer-events: none;
+      z-index: 10;
+    }
+    #z-top { top: 300px; }
+    #z-bottom { top: 510px; }
+
+    /* 控制面板 */
+    .controls {
+      margin-top: 20px;
+      width: 794px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: #222;
+      padding: 15px;
+      border-radius: 8px;
+      box-sizing: border-box;
+    }
+
+    .control-row {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+
+    .control-row input[type="range"] {
+      flex: 1;
+    }
+
+    .switches {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      font-size: 14px;
+    }
+
+    .switches label {
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Brokeback_Clif (斷背山) - 地圖預覽</h1>
+
+  <div class="viewport">
+    <div class="stage-world" id="stage">
+      <!-- 遠景：bc1, bc2, bc3 各一片，無多餘寬度 -->
+      <div id="bc1" class="layer bg-far-tile" style="left: 0px; background-image: url('https://tab030406.github.io/lf2/bg-sys-bc-bc1.png');"></div>
+      <div id="bc2" class="layer bg-far-tile" style="left: 460px; background-image: url('https://tab030406.github.io/lf2/bg-sys-bc-bc2.png');"></div>
+      <div id="bc3" class="layer bg-far-tile" style="left: 920px; background-image: url('https://tab030406.github.io/lf2/bg-sys-bc-bc3.png');"></div>
+
+      <!-- 中景山脊 (Layer 4) 改用 Canvas 繪製 -->
+      <canvas id="bc4-canvas" width="794" height="100"></canvas>
+
+      <!-- 地面 (Layer 5) -->
+      <div id="bc5" class="layer"></div>
+
+      <!-- Z軸邊界指示線 -->
+      <div id="z-top" class="z-boundary"></div>
+      <div id="z-bottom" class="z-boundary"></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="control-row">
+      <label for="camera">鏡頭位置 (Camera X):</label>
+      <input type="range" id="camera" min="0" max="706" value="0">
+      <span id="camera-val">0 px</span>
+    </div>
+
+    <div class="switches">
+      <label><input type="checkbox" id="toggle-bc1" checked> Layer 1 (bc1)</label>
+      <label><input type="checkbox" id="toggle-bc2" checked> Layer 2 (bc2)</label>
+      <label><input type="checkbox" id="toggle-bc3" checked> Layer 3 (bc3)</label>
+      <label><input type="checkbox" id="toggle-bc4" checked> Layer 4 (bc4)</label>
+      <label><input type="checkbox" id="toggle-bc5" checked> Layer 5 (bc5)</label>
+      <label><input type="checkbox" id="toggle-z" checked> Z軸指示線</label>
+    </div>
+  </div>
+
+  <script>
+    const cameraSlider = document.getElementById('camera');
+    const cameraVal = document.getElementById('camera-val');
+
+    const bc1Node = document.getElementById('bc1');
+    const bc2Node = document.getElementById('bc2');
+    const bc3Node = document.getElementById('bc3');
+    const bc4Canvas = document.getElementById('bc4-canvas');
+    const ctx4 = bc4Canvas.getContext('2d');
+    const bc5 = document.getElementById('bc5');
+    const zTop = document.getElementById('z-top');
+    const zBottom = document.getElementById('z-bottom');
+
+    const initialFarX = {
+      'bc1': 0,
+      'bc2': 460,
+      'bc3': 920
+    };
+
+    // 預載入 bc4 圖片並實作精準 Chroma Key (去黑底)
+    const bc4Img = new Image();
+    bc4Img.crossOrigin = "anonymous";
+    bc4Img.src = 'https://tab030406.github.io/lf2/bg-sys-bc-bc4.png';
+
+    let bc4CleanedCanvas = null;
+
+    bc4Img.onload = () => {
+      // 建立隱藏 Canvas 處理純黑過濾
+      const offCanvas = document.createElement('canvas');
+      offCanvas.width = bc4Img.width;
+      offCanvas.height = bc4Img.height;
+      const offCtx = offCanvas.getContext('2d');
+      offCtx.drawImage(bc4Img, 0, 0);
+
+      const imgData = offCtx.getImageData(0, 0, bc4Img.width, bc4Img.height);
+      const data = imgData.data;
+
+      // 模擬 LF2 引擎：只有 RGB 皆為 0 的純黑色像素會被設為完全透明
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 0) {
+          data[i + 3] = 0; // Alpha設為透明
+        }
+      }
+      offCtx.putImageData(imgData, 0, 0);
+      bc4CleanedCanvas = offCanvas;
+
+      renderBC4(0);
+    };
+
+    // 繪製 Layer 4 視差與重複邏輯
+    function renderBC4(cameraX) {
+      if (!bc4CleanedCanvas) return;
+      ctx4.clearRect(0, 0, bc4Canvas.width, bc4Canvas.height);
+
+      const shiftX = (cameraX * (800 / 1000)) % bc4CleanedCanvas.width;
+      let drawX = -shiftX;
+
+      while (drawX < bc4Canvas.width) {
+        ctx4.drawImage(bc4CleanedCanvas, drawX, 0);
+        drawX += bc4CleanedCanvas.width;
+      }
+    }
+
+    cameraSlider.addEventListener('input', (e) => {
+      const x = parseFloat(e.target.value);
+      cameraVal.textContent = `${Math.round(x)} px`;
+
+      // 遠景移動
+      bc1Node.style.left = `${initialFarX['bc1'] - x}px`;
+      bc2Node.style.left = `${initialFarX['bc2'] - x}px`;
+      bc3Node.style.left = `${initialFarX['bc3'] - x}px`;
+
+      // 中景 Canvas 重繪
+      renderBC4(x);
+
+      // 地面移動
+      bc5.style.backgroundPositionX = `${-x * (600 / 1000)}px`;
+    });
+
+    document.getElementById('toggle-bc1').addEventListener('change', (e) => {
+      bc1Node.style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    document.getElementById('toggle-bc2').addEventListener('change', (e) => {
+      bc2Node.style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    document.getElementById('toggle-bc3').addEventListener('change', (e) => {
+      bc3Node.style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    document.getElementById('toggle-bc4').addEventListener('change', (e) => {
+      bc4Canvas.style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    document.getElementById('toggle-bc5').addEventListener('change', (e) => {
+      bc5.style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    document.getElementById('toggle-z').addEventListener('change', (e) => {
+      const displayStyle = e.target.checked ? 'block' : 'none';
+      zTop.style.display = displayStyle;
+      zBottom.style.display = displayStyle;
+    });
+  </script>
+</body>
+</html>
