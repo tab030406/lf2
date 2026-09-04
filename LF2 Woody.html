@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>LF2 Woody Controller & Multi-Sprite Support</title>
+  <style>
+    body {
+      background-color: #1e1e1e;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-family: sans-serif;
+      margin: 20px 0;
+    }
+    .hud {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      background: #2a2a2a;
+      padding: 8px 16px;
+      border-radius: 8px;
+    }
+    .hud img { border: 1px solid #555; }
+    canvas {
+      border: 2px solid #555;
+      background-color: #3a3a3a;
+      image-rendering: pixelated;
+    }
+    .controls {
+      margin-top: 12px;
+      color: #aaa;
+      font-size: 14px;
+    }
+    .pic-section {
+      width: 95%;
+      max-width: 1000px;
+      margin-top: 30px;
+      border-top: 1px solid #444;
+      padding-top: 20px;
+    }
+    .pic-grid {
+      display: grid;
+      grid-template-columns: repeat(10, 1fr);
+      gap: 8px;
+      margin-top: 15px;
+    }
+    .pic-card {
+      background: #2a2a2a;
+      border: 1px solid #444;
+      border-radius: 6px;
+      padding: 4px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .pic-card canvas {
+      border: none;
+      background-color: #3a3a3a;
+      width: 79px;
+      height: 79px;
+      border-radius: 4px;
+    }
+    .pic-card span {
+      margin-top: 4px;
+      font-size: 11px;
+      color: #00e676;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>LF2 Woody 控制器 (Col 9 裂開修復版)</h2>
+
+  <div class="hud">
+    <img id="headPic" src="" alt="head" width="30" height="32">
+    <img id="smallPic" src="" alt="small" width="12" height="12">
+    <span><b>Woody</b></span>
+  </div>
+
+  <canvas id="gameCanvas" width="600" height="300"></canvas>
+
+  <div class="controls">
+    操作說明：<b>方向鍵 (← → ↑ ↓)</b> 移動 | <b>Shift + 方向鍵</b> 跑步 | <b>A 鍵</b> 攻擊 | <b>H 鍵</b> 搬重物走路
+  </div>
+
+  <div class="pic-section">
+    <h3>Pic 圖樣與編號對照表 (0 - 209)</h3>
+    <div id="picGrid" class="pic-grid"></div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const urls = {
+      head: 'https://tab030406.github.io/lf2/woody_f.bmp',
+      small: 'https://tab030406.github.io/lf2/woody_s.bmp',
+      woody0: 'https://tab030406.github.io/lf2/woody_0.bmp',
+      woody1: 'https://tab030406.github.io/lf2/woody_1.bmp',
+      woody2: 'https://tab030406.github.io/lf2/woody_2.bmp'
+    };
+
+    document.getElementById('headPic').src = urls.head;
+    document.getElementById('smallPic').src = urls.small;
+
+    const keys = {};
+    window.addEventListener('keydown', (e) => { keys[e.key] = true; });
+    window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+
+    const processedImages = {};
+    let loadedCount = 0;
+    const spriteSources = {
+      woody0: urls.woody0,
+      woody1: urls.woody1,
+      woody2: urls.woody2
+    };
+
+    function loadAndProcessImage(key, url) {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = url;
+
+      img.onload = () => {
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = img.width;
+        tempCanvas.height = img.height;
+        const tempCtx = tempCanvas.getContext('2d');
+
+        tempCtx.drawImage(img, 0, 0);
+
+        try {
+          const imgData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+          const data = imgData.data;
+          for (let i = 0; i < data.length; i += 4) {
+            if (data[i] <= 5 && data[i + 1] <= 5 && data[i + 2] <= 5) {
+              data[i + 3] = 0;
+            }
+          }
+          tempCtx.putImageData(imgData, 0, 0);
+        } catch (e) {
+          console.warn('CORS 限制，使用原始圖片渲染', e);
+        }
+
+        processedImages[key] = tempCanvas;
+        checkLoaded();
+      };
+
+      img.onerror = () => {
+        console.error(`圖片載入失敗: ${url}`);
+        const fallbackCanvas = document.createElement('canvas');
+        fallbackCanvas.width = 790;
+        fallbackCanvas.height = 790;
+        processedImages[key] = fallbackCanvas;
+        checkLoaded();
+      };
+    }
+
+    function checkLoaded() {
+      loadedCount++;
+      if (loadedCount === Object.keys(spriteSources).length) {
+        generatePicList();
+        requestAnimationFrame(gameLoop);
+      }
+    }
+
+    for (let key in spriteSources) {
+      loadAndProcessImage(key, spriteSources[key]);
+    }
+
+    const frameWidth = 79;
+    const frameHeight = 79;
+    const cols = 10;
+    const totalPics = 210;
+
+    // 特定 pic 獨立微調 (預防超出邊界)
+    const picCustomOffsets = {
+      88: { x: 0, y: 0 },
+      89: { x: 0, y: 0 }
+    };
+
+    const character = {
+      x: 150,
+      y: 180,
+      walkSpeed: 2.5,
+      runSpeed: 5.0,
+      facing: 1,
+      state: 'standing',
+      frameIndex: 0,
+      waitCounter: 0,
+      
+      animations: {
+        standing: [
+          { pic: 0, wait: 16 },
+          { pic: 1, wait: 10 },
+          { pic: 2, wait: 16 },
+          { pic: 3, wait: 28 }
+        ],
+        walking: [
+          { pic: 4, wait: 12 },
+          { pic: 5, wait: 12 },
+          { pic: 6, wait: 12 }
+        ],
+        running: [
+          { pic: 20, wait: 8 },
+          { pic: 21, wait: 8 },
+          { pic: 22, wait: 8 }
+        ],
+        punch: [
+          { pic: 10, wait: 8 },
+          { pic: 11, wait: 8 },
+          { pic: 12, wait: 14 }
+        ],
+        heavy_obj_walk: [
+          { pic: 23, wait: 8 },
+          { pic: 24, wait: 8 },
+          { pic: 25, wait: 8 },
+          { pic: 26, wait: 8 }
+        ]
+      }
+    };
+
+    function getPicData(picIndex) {
+      let imgCanvas = processedImages.woody0;
+      let localIndex = picIndex;
+
+      if (picIndex >= 140) {
+        imgCanvas = processedImages.woody2;
+        localIndex = picIndex - 140;
+      } else if (picIndex >= 70) {
+        imgCanvas = processedImages.woody1;
+        localIndex = picIndex - 70;
+      }
+
+      const col = localIndex % cols;
+      const row = Math.floor(localIndex / cols);
+
+      // 標準LF2精靈圖每格精確為 79x79
+      let sx = col * (frameWidth + 1); // 加上 1px 網格邊界間距
+      let sy = row * (frameHeight + 1);
+
+      // 個別圖檔例外微調
+      if (picCustomOffsets[picIndex]) {
+        sx += picCustomOffsets[picIndex].x || 0;
+        sy += picCustomOffsets[picIndex].y || 0;
+      }
+
+      // 安全機制：避免超出圖檔寬度導致剖半
+      if (imgCanvas && sx + frameWidth > imgCanvas.width) {
+        sx = imgCanvas.width - frameWidth;
+      }
+      if (sx < 0) sx = 0;
+
+      return {
+        imgCanvas: imgCanvas,
+        sx: Math.max(0, sx),
+        sy: Math.max(0, sy)
+      };
+    }
+
+    function generatePicList() {
+      const grid = document.getElementById('picGrid');
+      grid.innerHTML = '';
+      
+      for (let i = 0; i < totalPics; i++) {
+        const { imgCanvas: spriteCanvas, sx, sy } = getPicData(i);
+
+        const cardCanvas = document.createElement('canvas');
+        cardCanvas.width = frameWidth;
+        cardCanvas.height = frameHeight;
+        const cardCtx = cardCanvas.getContext('2d');
+
+        if (spriteCanvas) {
+          cardCtx.drawImage(
+            spriteCanvas, 
+            sx, sy, frameWidth, frameHeight, 
+            0, 0, frameWidth, frameHeight
+          );
+        }
+
+        const card = document.createElement('div');
+        card.className = 'pic-card';
+
+        const label = document.createElement('span');
+        label.innerText = `pic: ${i}`;
+
+        card.appendChild(cardCanvas);
+        card.appendChild(label);
+        grid.appendChild(card);
+      }
+    }
+
+    function gameLoop() {
+      update();
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function update() {
+      if (character.state === 'punch') {
+        advanceFrame();
+        return;
+      }
+
+      if (keys['a'] || keys['A']) {
+        switchState('punch');
+        return;
+      }
+
+      let isMoving = false;
+      let dx = 0;
+      let dy = 0;
+
+      const isRunning = keys['Shift'];
+      const isHeavy = keys['h'] || keys['H'];
+      const speed = isRunning ? character.runSpeed : character.walkSpeed;
+
+      if (keys['ArrowLeft']) { dx -= speed; character.facing = -1; isMoving = true; }
+      if (keys['ArrowRight']) { dx += speed; character.facing = 1; isMoving = true; }
+      if (keys['ArrowUp']) { dy -= speed * 0.6; isMoving = true; }
+      if (keys['ArrowDown']) { dy += speed * 0.6; isMoving = true; }
+
+      character.x += dx;
+      character.y += dy;
+
+      if (isMoving) {
+        if (isHeavy) {
+          switchState('heavy_obj_walk');
+        } else if (isRunning) {
+          switchState('running');
+        } else {
+          switchState('walking');
+        }
+      } else {
+        switchState('standing');
+      }
+
+      advanceFrame();
+    }
+
+    function switchState(newState) {
+      if (character.state !== newState) {
+        character.state = newState;
+        character.frameIndex = 0;
+        character.waitCounter = 0;
+      }
+    }
+
+    function advanceFrame() {
+      const currentAnim = character.animations[character.state];
+      const currentFrame = currentAnim[character.frameIndex];
+
+      character.waitCounter++;
+      if (character.waitCounter >= currentFrame.wait) {
+        character.waitCounter = 0;
+        character.frameIndex++;
+
+        if (character.frameIndex >= currentAnim.length) {
+          if (character.state === 'punch') {
+            switchState('standing');
+          } else {
+            character.frameIndex = 0;
+          }
+        }
+      }
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const currentAnim = character.animations[character.state];
+      const frame = currentAnim[character.frameIndex];
+
+      const { imgCanvas: spriteCanvas, sx, sy } = getPicData(frame.pic);
+
+      if (spriteCanvas) {
+        ctx.save();
+        ctx.translate(character.x, character.y);
+        if (character.facing === -1) {
+          ctx.scale(-1, 1);
+        }
+        
+        ctx.drawImage(
+          spriteCanvas, 
+          sx, sy, frameWidth, frameHeight, 
+          -frameWidth / 2, -frameHeight, frameWidth, frameHeight
+        );
+        
+        ctx.restore();
+      }
+    }
+  </script>
+
+</body>
+</html>
